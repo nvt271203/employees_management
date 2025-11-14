@@ -2,8 +2,8 @@ from tkinter import Tk, Button, Label, Scrollbar, StringVar, Entry, W, E, N, S, 
 from tkinter import ttk
 from tkinter import messagebox
 from tkcalendar import DateEntry
-from sqlserver_config import dbConfig
-import pypyodbc as pyo
+from pymongo import MongoClient, errors as mongo_errors
+from bson.objectid import ObjectId
 from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,19 +13,30 @@ import matplotlib.ticker as ticker
 class EmployeeManagementApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Employee Management System")
+        self.root.title("Employee Management System ")
         self.root.state('zoomed')
         self.root.configure(bg="#f0f2f5")
 
         try:
-            self.con = pyo.connect(**dbConfig)
-            self.con.autocommit = False  # Tắt autocommit
-            self.cursor = self.con.cursor()
+            CONNECTION_STRING = "mongodb+srv://<username>:<password>@mycluster.xxxxx.mongod/b.net/"
+            self.client = MongoClient(CONNECTION_STRING, serverSelectionTimeoutMS=5000)
+            self.db = self.client['employee_db']  # Tên database
+            self.collection = self.db['employees']  # Tên collection
+
+            # Kiểm tra kết nối
+            self.client.server_info()
+            # ------------------------------------
+            # ------------------------------------
+        except mongo_errors.ServerSelectionTimeoutError as e:
+            messagebox.showerror("Database Error", f"Failed to connect to MongoDB: {str(e)}")
+            self.root.destroy()
+            return
         except Exception as e:
             messagebox.showerror("Database Error", f"Failed to connect to database: {str(e)}")
             self.root.destroy()
             return
 
+        # Biến employee_id_var giờ sẽ lưu _id của MongoDB (dưới dạng string)
         self.employee_id_var = StringVar()
         self.full_name_var = StringVar()
         self.date_of_birth_var = StringVar()
@@ -39,8 +50,8 @@ class EmployeeManagementApp:
 
         self.create_gui()
 
+    # (Các hàm format_currency và parse_currency giữ nguyên, không cần thay đổi)
     def format_currency(self, amount):
-        """Định dạng số tiền thành chuỗi với dấu chấm phân cách và VND"""
         try:
             formatted = "{:,.0f}".format(int(amount)).replace(",", ".")
             return f"{formatted} VND"
@@ -48,13 +59,13 @@ class EmployeeManagementApp:
             return "0 VND"
 
     def parse_currency(self, formatted_amount):
-        """Chuyển chuỗi tiền tệ (3.000.000 VND) thành số nguyên"""
         try:
             cleaned = formatted_amount.replace("VND", "").replace(".", "").strip()
             return int(cleaned)
         except (ValueError, TypeError):
             return 0
 
+    # (Hàm create_gui giữ nguyên, không cần thay đổi)
     def create_gui(self):
         # Style
         style = ttk.Style()
@@ -154,7 +165,7 @@ class EmployeeManagementApp:
         self.tree.heading("Total", text="Total Salary")
 
         # Độ rộng cột và viền
-        self.tree.column("ID", width=40, anchor="center")
+        self.tree.column("ID", width=150, anchor="w")  # <--- MONGODB (Tăng độ rộng cho _id)
         self.tree.column("Name", width=150, anchor="w")
         self.tree.column("DOB", width=100, anchor="center")
         self.tree.column("Gender", width=80, anchor="center")
@@ -162,8 +173,8 @@ class EmployeeManagementApp:
         self.tree.column("Phone", width=100, anchor="center")
         self.tree.column("Position", width=100, anchor="w")
         self.tree.column("Days", width=80, anchor="center")
-        self.tree.column("Salary", width=120, anchor="center")  # Tăng độ rộng cho cột Salary
-        self.tree.column("Total", width=120, anchor="center")   # Tăng độ rộng cho cột Total
+        self.tree.column("Salary", width=120, anchor="center")
+        self.tree.column("Total", width=120, anchor="center")
 
         # Thêm viền phân cách
         style.configure("Treeview", highlightthickness=1, bd=1)
@@ -178,7 +189,8 @@ class EmployeeManagementApp:
         # Trường tìm kiếm
         ttk.Label(button_frame, text="Search Name:", font=("Helvetica", 12, "bold"), background="#f0f2f5").grid(row=0,
                                                                                                                 column=0,
-                                                                                                                padx=(10, 5),
+                                                                                                                padx=(
+                                                                                                                10, 5),
                                                                                                                 pady=5,
                                                                                                                 sticky=E)
         search_entry = ttk.Entry(button_frame, textvariable=self.search_var, width=20, font=("Helvetica", 12))
@@ -207,12 +219,12 @@ class EmployeeManagementApp:
 
         # Danh sách nút
         buttons = [
-            ("Search", self.search_employee, "#17a2b8"),  # Nút tìm kiếm
+            ("Search", self.search_employee, "#17a2b8"),
             ("Add", self.add_employee, "#28a745"),
             ("Update", self.update_employee, "#007bff"),
             ("Delete", self.delete_employee, "#dc3545"),
             ("Clear", self.clear_fields, "#6c757d"),
-            ("Chart", self.show_chart, "#ff9800"),  # Nút Chart mới
+            ("Chart", self.show_chart, "#ff9800"),
             ("Exit", self.exit_app, "#343a40")
         ]
 
@@ -231,7 +243,7 @@ class EmployeeManagementApp:
                 highlightthickness=0,
                 borderwidth=0
             )
-            btn.grid(row=0, column=i + 3, padx=15, pady=5)  # Dịch cột do có reset
+            btn.grid(row=0, column=i + 3, padx=15, pady=5)
             btn.configure(activebackground=bg, activeforeground="white")
             btn.configure(highlightbackground="#ffffff", highlightcolor="#ffffff", borderwidth=2, relief="solid")
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg="#e0e0e0"))
@@ -245,77 +257,64 @@ class EmployeeManagementApp:
 
     def show_chart(self):
         try:
-            # Lấy dữ liệu từ cơ sở dữ liệu
-            self.cursor.execute(
-                "SELECT FullName, WorkingDays, DailySalary FROM Employee WHERE WorkingDays > 0 AND DailySalary > 0")
-            data = self.cursor.fetchall()
+            # <--- MONGODB: Lấy dữ liệu cho biểu đồ ---
+            # Tìm tất cả các tài liệu có WorkingDays > 0 VÀ DailySalary > 0
+            # Chỉ lấy các trường FullName, WorkingDays, DailySalary
+            query = {"WorkingDays": {"$gt": 0}, "DailySalary": {"$gt": 0}}
+            projection = {"FullName": 1, "WorkingDays": 1, "DailySalary": 1, "_id": 0}
+            data_cursor = self.collection.find(query, projection)
+
+            # Chuyển đổi con trỏ thành danh sách
+            data = list(data_cursor)
+            # ----------------------------------------
 
             if not data:
                 messagebox.showinfo("No Data", "No valid employee data found for the chart!")
                 return
 
-            # Chuẩn bị dữ liệu cho biểu đồ
-            nhan_vien = [row[0] for row in data]
-            ngay_lam_viec = [row[1] for row in data]
-            muc_luong_moi_ngay = [row[2] for row in data]
-            tong_luong = [row[1] * row[2] for row in data]  # Tính tổng lương
+            # <--- MONGODB: Chuẩn bị dữ liệu từ document ---
+            nhan_vien = [doc['FullName'] for doc in data]
+            ngay_lam_viec = [doc['WorkingDays'] for doc in data]
+            muc_luong_moi_ngay = [doc['DailySalary'] for doc in data]
+            tong_luong = [doc['WorkingDays'] * doc['DailySalary'] for doc in data]
+            # -------------------------------------------
 
-            # Thiết lập biểu đồ
+            # (Phần còn lại của hàm matplotlib giữ nguyên)
             fig, ax1 = plt.subplots(figsize=(10, 6))
-
-            # Vẽ biểu đồ cột cho số ngày làm việc
             ax1.bar(np.arange(len(nhan_vien)) - 0.2, ngay_lam_viec, width=0.4, label='Ngày làm việc', color='b')
             ax1.set_xlabel('Nhân viên')
             ax1.set_ylabel('Số ngày làm việc', color='b')
             ax1.tick_params(axis='y', labelcolor='b')
-
-            # Thêm giá trị số ngày làm việc lên cột với định dạng "22d"
             for i, ngay in enumerate(ngay_lam_viec):
-                ax1.text(i - 0.2, ngay + 0.5, f'{ngay}d', ha='center', va='bottom', color='black', fontsize=10, weight='bold')
+                ax1.text(i - 0.2, ngay + 0.5, f'{ngay}d', ha='center', va='bottom', color='black', fontsize=10,
+                         weight='bold')
 
-            # Tạo trục thứ hai cho tổng lương
             ax2 = ax1.twinx()
             ax2.bar(np.arange(len(nhan_vien)) + 0.2, tong_luong, width=0.4, label='Tổng lương', color='g')
             ax2.set_ylabel('Tổng lương (Triệu VND)', color='g')
             ax2.tick_params(axis='y', labelcolor='g')
-
-            # Định dạng trục y của tổng lương thành đơn vị triệu
-            ax2.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f'{x/1000000:.0f}'))
-
-            # Thiết lập các mốc trục y (10, 20, 30, 40 triệu)
+            ax2.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f'{x / 1000000:.0f}'))
             max_salary = max(tong_luong) if tong_luong else 10000000
             ax2.set_yticks(np.arange(10000000, max_salary + 10000000, 10000000))
 
-            # Thêm văn bản mức lương mỗi ngày và tổng lương vào cột tổng lương
             for i, (luong, ngay, tong) in enumerate(zip(muc_luong_moi_ngay, ngay_lam_viec, tong_luong)):
-                # Chuyển mức lương mỗi ngày thành đơn vị "k" (nghìn đồng)
                 luong_k = luong / 1000
-                # Tạo chuỗi văn bản (ví dụ: "300k / 1d")
                 text = f'{luong_k:.0f}k / 1d'
-                # Đặt văn bản mức lương mỗi ngày vào giữa cột tổng lương
                 ax2.text(i + 0.2, tong / 2, text, ha='center', va='center', color='white', fontsize=10, weight='bold')
-                # Thêm giá trị tổng lương (triệu VND) lên trên cột
-                ax2.text(i + 0.2, tong + 500000, f'{tong/1000000:.0f}M', ha='center', va='bottom', color='black', fontsize=10, weight='bold')
+                ax2.text(i + 0.2, tong + 500000, f'{tong / 1000000:.0f}M', ha='center', va='bottom', color='black',
+                         fontsize=10, weight='bold')
 
-            # Thiết lập tiêu đề và các nhãn
             plt.title('Số ngày làm việc và tổng lương của nhân viên')
             ax1.set_xticks(np.arange(len(nhan_vien)))
             ax1.set_xticklabels(nhan_vien, rotation=45, ha='right')
-
-            # Hiển thị chú thích
             fig.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=2)
-
-            # Tự động điều chỉnh bố cục
             plt.tight_layout()
-
-            # Hiển thị biểu đồ
             plt.show()
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate chart: {str(e)}")
 
     def validate_integer(self, value):
-        """Kiểm tra giá trị có phải số nguyên hợp lệ không"""
         if not value:
             return True
         try:
@@ -327,90 +326,139 @@ class EmployeeManagementApp:
     def load_employees(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        self.cursor.execute(
-            "SELECT EmployeeID, FullName, CONVERT(VARCHAR, DateOfBirth, 105) AS DateOfBirth, Gender, Address, PhoneNumber, Position, WorkingDays, DailySalary FROM Employee")
-        for row in self.cursor.fetchall():
-            total_salary = row[7] * row[8]
-            formatted_daily_salary = self.format_currency(row[8])
-            formatted_total_salary = self.format_currency(total_salary)
-            self.tree.insert("", END, values=(
-                row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7],
-                formatted_daily_salary, formatted_total_salary
-            ), tags=("cell",))
+
+        # <--- MONGODB: Lấy tất cả tài liệu từ collection ---
+        try:
+            for doc in self.collection.find():
+                # Lấy dữ liệu từ document, sử dụng .get() để tránh lỗi nếu thiếu trường
+                employee_id = str(doc['_id'])
+                full_name = doc.get('FullName', '')
+
+                # Chuyển đổi datetime từ MongoDB sang chuỗi DD-MM-YYYY
+                dob_obj = doc.get('DateOfBirth')
+                dob_str = dob_obj.strftime('%d-%m-%Y') if dob_obj else ''
+
+                gender = doc.get('Gender', 'Male')
+                address = doc.get('Address', '')
+                phone = doc.get('PhoneNumber', '')
+                position = doc.get('Position', 'Nhân viên')
+                days = doc.get('WorkingDays', 0)
+                daily_salary = doc.get('DailySalary', 0)
+
+                # Tính toán và định dạng
+                total_salary = days * daily_salary
+                formatted_daily_salary = self.format_currency(daily_salary)
+                formatted_total_salary = self.format_currency(total_salary)
+
+                self.tree.insert("", END, values=(
+                    employee_id, full_name, dob_str, gender, address, phone, position,
+                    days, formatted_daily_salary, formatted_total_salary
+                ), tags=("cell",))
+        except mongo_errors.PyMongoError as e:
+            messagebox.showerror("Database Error", f"Failed to load employees: {str(e)}")
+        # -------------------------------------------------
 
     def search_employee(self):
         search_term = self.search_var.get().strip()
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        query = """
-            SELECT EmployeeID, FullName, CONVERT(VARCHAR, DateOfBirth, 105) AS DateOfBirth, Gender, Address, PhoneNumber, Position, WorkingDays, DailySalary
-            FROM Employee
-            WHERE LOWER(FullName) LIKE LOWER(?)
-        """
-        search_param = f'%{search_term}%'
-        self.cursor.execute(query, (search_param,))
+        # <--- MONGODB: Sử dụng regex để tìm kiếm (tương đương LIKE %...%) ---
+        # "$options": "i" để tìm kiếm không phân biệt chữ hoa/thường
+        query = {"FullName": {"$regex": search_term, "$options": "i"}}
 
-        for row in self.cursor.fetchall():
-            total_salary = row[7] * row[8]
-            formatted_daily_salary = self.format_currency(row[8])
-            formatted_total_salary = self.format_currency(total_salary)
-            self.tree.insert("", END, values=(
-                row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7],
-                formatted_daily_salary, formatted_total_salary
-            ), tags=("cell",))
+        try:
+            results = self.collection.find(query)
+            count = 0
+            for doc in results:
+                count += 1
+                employee_id = str(doc['_id'])
+                full_name = doc.get('FullName', '')
+                dob_obj = doc.get('DateOfBirth')
+                dob_str = dob_obj.strftime('%d-%m-%Y') if dob_obj else ''
+                gender = doc.get('Gender', 'Male')
+                address = doc.get('Address', '')
+                phone = doc.get('PhoneNumber', '')
+                position = doc.get('Position', 'Nhân viên')
+                days = doc.get('WorkingDays', 0)
+                daily_salary = doc.get('DailySalary', 0)
 
-        if not self.tree.get_children():
-            messagebox.showinfo("Search Result", "No employees found matching the search term.")
+                total_salary = days * daily_salary
+                formatted_daily_salary = self.format_currency(daily_salary)
+                formatted_total_salary = self.format_currency(total_salary)
+
+                self.tree.insert("", END, values=(
+                    employee_id, full_name, dob_str, gender, address, phone, position,
+                    days, formatted_daily_salary, formatted_total_salary
+                ), tags=("cell",))
+
+            if count == 0:
+                messagebox.showinfo("Search Result", "No employees found matching the search term.")
+        except mongo_errors.PyMongoError as e:
+            messagebox.showerror("Database Error", f"Failed to search employees: {str(e)}")
+        # ----------------------------------------------------------------
 
     def reset_search(self):
-        self.search_var.set("")  # Xóa trường tìm kiếm
-        self.load_employees()    # Tải lại toàn bộ dữ liệu
+        self.search_var.set("")
+        self.load_employees()
+
+    # <--- MONGODB: Hàm trợ giúp để xác thực và lấy dữ liệu từ form ---
+    def _get_employee_document_from_form(self):
+        """Lấy dữ liệu từ form, xác thực và trả về một document (dict)."""
+        if not self.full_name_var.get():
+            messagebox.showwarning("Warning", "Full Name is required!")
+            return None
+        if not self.date_of_birth_var.get():
+            messagebox.showwarning("Warning", "Date of Birth is required!")
+            return None
+
+        try:
+            # Chuyển đổi ngày tháng sang đối tượng datetime để lưu trữ
+            dob_obj = datetime.strptime(self.date_of_birth_var.get(), "%d-%m-%Y")
+        except ValueError:
+            messagebox.showwarning("Warning", "Invalid Date of Birth format! Use DD-MM-YYYY")
+            return None
+
+        if self.working_days_var.get() and not self.validate_integer(self.working_days_var.get()):
+            messagebox.showwarning("Warning", "Working Days must be an integer!")
+            return None
+        if self.daily_salary_var.get() and not self.validate_integer(self.daily_salary_var.get()):
+            messagebox.showwarning("Warning", "Daily Salary must be an integer!")
+            return None
+
+        # Tạo document (dictionary) để chèn vào MongoDB
+        employee_doc = {
+            "FullName": self.full_name_var.get(),
+            "DateOfBirth": dob_obj,
+            "Gender": self.gender_var.get(),
+            "Address": self.address_var.get(),
+            "PhoneNumber": self.phone_number_var.get(),
+            "Position": self.position_var.get(),
+            "WorkingDays": int(self.working_days_var.get() or 0),
+            "DailySalary": int(self.daily_salary_var.get() or 0)
+        }
+        return employee_doc
+
+    # ------------------------------------------------------------
 
     def add_employee(self):
         try:
-            if not self.full_name_var.get():
-                messagebox.showwarning("Warning", "Full Name is required!")
-                return
-            if not self.date_of_birth_var.get():
-                messagebox.showwarning("Warning", "Date of Birth is required!")
-                return
+            # <--- MONGODB: Lấy document từ form ---
+            employee_doc = self._get_employee_document_from_form()
+            if not employee_doc:
+                return  # Validation failed
 
-            try:
-                datetime.strptime(self.date_of_birth_var.get(), "%d-%m-%Y")
-            except ValueError:
-                messagebox.showwarning("Warning", "Invalid Date of Birth format! Use DD-MM-YYYY")
-                return
+            # <--- MONGODB: Chèn document vào collection ---
+            self.collection.insert_one(employee_doc)
+            # ---------------------------------------------
 
-            if self.working_days_var.get() and not self.validate_integer(self.working_days_var.get()):
-                messagebox.showwarning("Warning", "Working Days must be an integer!")
-                return
-            if self.daily_salary_var.get() and not self.validate_integer(self.daily_salary_var.get()):
-                messagebox.showwarning("Warning", "Daily Salary must be an integer!")
-                return
-
-            self.cursor.execute("""
-                INSERT INTO Employee (FullName, DateOfBirth, Gender, Address, PhoneNumber, Position, WorkingDays, DailySalary)
-                OUTPUT INSERTED.EmployeeID
-                VALUES (?, CONVERT(DATE, ?, 105), ?, ?, ?, ?, ?, ?)
-            """, (
-                self.full_name_var.get(),
-                self.date_of_birth_var.get(),
-                self.gender_var.get(),
-                self.address_var.get(),
-                self.phone_number_var.get(),
-                self.position_var.get(),
-                self.working_days_var.get() or "0",
-                self.daily_salary_var.get() or "0"
-            ))
-            employee_id = self.cursor.fetchone()[0]
-            self.con.commit()
             self.load_employees()
             self.clear_fields()
             messagebox.showinfo("Success", "Employee added successfully!")
-        except Exception as e:
-            self.con.rollback()
+        except mongo_errors.PyMongoError as e:
             messagebox.showerror("Error", f"Failed to add employee: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
 
     def update_employee(self):
         selected = self.tree.selection()
@@ -418,49 +466,30 @@ class EmployeeManagementApp:
             messagebox.showwarning("Warning", "Please select an employee to update!")
             return
         try:
-            if not self.full_name_var.get():
-                messagebox.showwarning("Warning", "Full Name is required!")
-                return
-            if not self.date_of_birth_var.get():
-                messagebox.showwarning("Warning", "Date of Birth is required!")
-                return
+            # <--- MONGODB: Lấy document từ form ---
+            employee_doc = self._get_employee_document_from_form()
+            if not employee_doc:
+                return  # Validation failed
 
-            try:
-                datetime.strptime(self.date_of_birth_var.get(), "%d-%m-%Y")
-            except ValueError:
-                messagebox.showwarning("Warning", "Invalid Date of Birth format! Use DD-MM-YYYY")
-                return
+            # <--- MONGODB: Lấy _id từ dòng đã chọn ---
+            employee_id_str = self.tree.item(selected[0])["values"][0]
+            employee_oid = ObjectId(employee_id_str)  # Chuyển chuỗi ID thành ObjectId
 
-            if self.working_days_var.get() and not self.validate_integer(self.working_days_var.get()):
-                messagebox.showwarning("Warning", "Working Days must be an integer!")
-                return
-            if self.daily_salary_var.get() and not self.validate_integer(self.daily_salary_var.get()):
-                messagebox.showwarning("Warning", "Daily Salary must be an integer!")
-                return
+            # <--- MONGODB: Cập nhật document ---
+            # Sử dụng $set để cập nhật các trường
+            self.collection.update_one(
+                {"_id": employee_oid},
+                {"$set": employee_doc}
+            )
+            # -----------------------------------
 
-            employee_id = self.tree.item(selected[0])["values"][0]
-            self.cursor.execute("""
-                UPDATE Employee
-                SET FullName = ?, DateOfBirth = CONVERT(DATE, ?, 105), Gender = ?, Address = ?, PhoneNumber = ?, Position = ?, WorkingDays = ?, DailySalary = ?
-                WHERE EmployeeID = ?
-            """, (
-                self.full_name_var.get(),
-                self.date_of_birth_var.get(),
-                self.gender_var.get(),
-                self.address_var.get(),
-                self.phone_number_var.get(),
-                self.position_var.get(),
-                self.working_days_var.get() or "0",
-                self.daily_salary_var.get() or "0",
-                employee_id
-            ))
-            self.con.commit()
             self.load_employees()
             self.clear_fields()
             messagebox.showinfo("Success", "Employee updated successfully!")
-        except Exception as e:
-            self.con.rollback()
+        except mongo_errors.PyMongoError as e:
             messagebox.showerror("Error", f"Failed to update employee: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
 
     def delete_employee(self):
         selected = self.tree.selection()
@@ -469,18 +498,24 @@ class EmployeeManagementApp:
             return
         if messagebox.askyesno("Confirm", "Are you sure you want to delete this employee?"):
             try:
-                employee_id = self.tree.item(selected[0])["values"][0]
-                self.cursor.execute("DELETE FROM Employee WHERE EmployeeID = ?", (employee_id,))
-                self.con.commit()
+                # <--- MONGODB: Lấy _id từ dòng đã chọn ---
+                employee_id_str = self.tree.item(selected[0])["values"][0]
+                employee_oid = ObjectId(employee_id_str)  # Chuyển chuỗi ID thành ObjectId
+
+                # <--- MONGODB: Xóa document ---
+                self.collection.delete_one({"_id": employee_oid})
+                # ------------------------------
+
                 self.load_employees()
                 self.clear_fields()
                 messagebox.showinfo("Success", "Employee deleted successfully!")
-            except Exception as e:
-                self.con.rollback()
+            except mongo_errors.PyMongoError as e:
                 messagebox.showerror("Error", f"Failed to delete employee: {str(e)}")
+            except Exception as e:
+                messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
 
     def clear_fields(self):
-        self.employee_id_var.set("")
+        self.employee_id_var.set("")  # <--- MONGODB (Xóa _id)
         self.full_name_var.set("")
         self.date_of_birth_var.set("")
         self.gender_var.set("Male")
@@ -489,17 +524,17 @@ class EmployeeManagementApp:
         self.position_var.set("Nhân viên")
         self.working_days_var.set("")
         self.daily_salary_var.set("")
-        self.search_var.set("")  # Xóa trường tìm kiếm
+        self.search_var.set("")
 
     def exit_app(self):
-        self.con.close()
+        self.client.close()  # <--- MONGODB (Đóng kết nối client)
         self.root.destroy()
 
     def on_select(self, event):
         selected = self.tree.selection()
         if selected:
             values = self.tree.item(selected[0])["values"]
-            self.employee_id_var.set(values[0])
+            self.employee_id_var.set(values[0])  # <--- MONGODB (Lưu _id)
             self.full_name_var.set(values[1])
             self.date_of_birth_var.set(values[2])
             self.gender_var.set(values[3])
@@ -507,6 +542,7 @@ class EmployeeManagementApp:
             self.phone_number_var.set(values[5])
             self.position_var.set(values[6])
             self.working_days_var.set(str(values[7]))
+            # Hàm parse_currency đã xử lý chuỗi "VND"
             self.daily_salary_var.set(str(self.parse_currency(values[8])))
 
 
